@@ -103,9 +103,16 @@ class RawTransactionsTest(BitcoinTestFramework):
         self.generate(self.nodes[2], 1)
         self.generate(self.nodes[0], 121)
 
+        # coins for simple tests
+        self.nodes[0].sendtoaddress(self.nodes[2].getnewaddress(), 1.5)
+        self.nodes[0].sendtoaddress(self.nodes[2].getnewaddress(), 1.0)
+        self.nodes[0].sendtoaddress(self.nodes[2].getnewaddress(), 5.0)
+
+        self.generate(self.nodes[0], 1)
+
+        self.test_watchonly()
         self.test_change_position()
         self.test_simple()
-        self.test_simple_two_coins()
         self.test_simple_two_outputs()
         self.test_change()
         self.test_no_change()
@@ -126,7 +133,6 @@ class RawTransactionsTest(BitcoinTestFramework):
         self.test_many_inputs_fee()
         self.test_many_inputs_send()
         self.test_op_return()
-        self.test_watchonly()
         self.test_all_watched_funds()
         self.test_option_feerate()
         self.test_address_reuse()
@@ -145,27 +151,6 @@ class RawTransactionsTest(BitcoinTestFramework):
         rawmatch = self.nodes[2].fundrawtransaction(rawmatch, {"changePosition":1, "subtractFeeFromOutputs":[0]})
         assert_equal(rawmatch["changepos"], -1)
 
-        self.nodes[3].createwallet(wallet_name="wwatch", disable_private_keys=True)
-        wwatch = self.nodes[3].get_wallet_rpc('wwatch')
-        watchonly_address = self.nodes[0].getnewaddress()
-        watchonly_pubkey = self.nodes[0].getaddressinfo(watchonly_address)["pubkey"]
-        self.watchonly_amount = Decimal(200)
-        wwatch.importpubkey(watchonly_pubkey, "", True)
-        self.watchonly_txid = self.nodes[0].sendtoaddress(watchonly_address, self.watchonly_amount)
-
-        # Lock UTXO so nodes[0] doesn't accidentally spend it
-        self.watchonly_vout = find_vout_for_address(self.nodes[0], self.watchonly_txid, watchonly_address)
-        self.nodes[0].lockunspent(False, [{"txid": self.watchonly_txid, "vout": self.watchonly_vout}])
-
-        self.nodes[0].sendtoaddress(self.nodes[3].get_wallet_rpc(self.default_wallet_name).getnewaddress(), self.watchonly_amount / 10)
-
-        self.nodes[0].sendtoaddress(self.nodes[2].getnewaddress(), 1.5)
-        self.nodes[0].sendtoaddress(self.nodes[2].getnewaddress(), 1.0)
-        self.nodes[0].sendtoaddress(self.nodes[2].getnewaddress(), 5.0)
-
-        self.generate(self.nodes[0], 1)
-
-        wwatch.unloadwallet()
 
     def test_simple(self):
         self.log.info("Test fundrawtxn")
@@ -176,17 +161,6 @@ class RawTransactionsTest(BitcoinTestFramework):
         rawtxfund = self.nodes[2].fundrawtransaction(rawtx)
         dec_tx  = self.nodes[2].decoderawtransaction(rawtxfund['hex'])
         assert len(dec_tx['vin']) > 0  #test that we have enough inputs
-
-    def test_simple_two_coins(self):
-        self.log.info("Test fundrawtxn with 2 coins")
-        inputs  = [ ]
-        outputs = { self.nodes[0].getnewaddress() : 2.2 }
-        rawtx   = self.nodes[2].createrawtransaction(inputs, outputs)
-        dec_tx  = self.nodes[2].decoderawtransaction(rawtx)
-
-        rawtxfund = self.nodes[2].fundrawtransaction(rawtx)
-        dec_tx  = self.nodes[2].decoderawtransaction(rawtxfund['hex'])
-        assert len(dec_tx['vin']) > 0  #test if we have enough inputs
         assert_equal(dec_tx['vin'][0]['scriptSig']['hex'], '')
 
     def test_simple_two_outputs(self):
@@ -694,12 +668,25 @@ class RawTransactionsTest(BitcoinTestFramework):
     def test_watchonly(self):
         self.log.info("Test fundrawtxn using only watchonly")
 
+        self.nodes[3].createwallet(wallet_name="wwatch", disable_private_keys=True)
+        wwatch = self.nodes[3].get_wallet_rpc('wwatch')
+        watchonly_address = self.nodes[0].getnewaddress()
+        watchonly_pubkey = self.nodes[0].getaddressinfo(watchonly_address)["pubkey"]
+        self.watchonly_amount = Decimal(200)
+        wwatch.importpubkey(watchonly_pubkey, "", True)
+        self.watchonly_txid = self.nodes[0].sendtoaddress(watchonly_address, self.watchonly_amount)
+
+        # Lock UTXO so nodes[0] doesn't accidentally spend it
+        self.watchonly_vout = find_vout_for_address(self.nodes[0], self.watchonly_txid, watchonly_address)
+        self.nodes[0].lockunspent(False, [{"txid": self.watchonly_txid, "vout": self.watchonly_vout}])
+
+        self.nodes[0].sendtoaddress(self.nodes[3].get_wallet_rpc(self.default_wallet_name).getnewaddress(), self.watchonly_amount / 10)
+        self.generate(self.nodes[0], 1)
+
         inputs = []
         outputs = {self.nodes[2].getnewaddress(): self.watchonly_amount / 2}
         rawtx = self.nodes[3].createrawtransaction(inputs, outputs)
 
-        self.nodes[3].loadwallet('wwatch')
-        wwatch = self.nodes[3].get_wallet_rpc('wwatch')
         # Setup change addresses for the watchonly wallet
         desc_import = [{
             "desc": descsum_create("wpkh(tpubD6NzVbkrYhZ4YNXVQbNhMK1WqguFsUXceaVJKbmno2aZ3B6QfbMeraaYvnBSGpV3vxLyTTK9DYT1yoEck4XUScMzXoQ2U2oSmE2JyMedq3H/1/*)"),
@@ -849,11 +836,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         rawtx = self.nodes[3].createrawtransaction(inputs=[], outputs={self.nodes[3].getnewaddress(): 1})
         result3 = self.nodes[3].fundrawtransaction(rawtx)
         res_dec = self.nodes[0].decoderawtransaction(result3["hex"])
-        changeaddress = ""
-        for out in res_dec['vout']:
-            if out['value'] > 1.0:
-                changeaddress += out['scriptPubKey']['address']
-        assert changeaddress != ""
+        changeaddress = res_dec["vout"][result3["changepos"]]['scriptPubKey']['address']
         nextaddr = self.nodes[3].getnewaddress()
         # Now the change address key should be removed from the keypool.
         assert changeaddress != nextaddr
